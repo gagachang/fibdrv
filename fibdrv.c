@@ -4,6 +4,7 @@
 #include <linux/init.h>
 #include <linux/kdev_t.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 
@@ -24,9 +25,11 @@ static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 
+static ktime_t kt;
+
+/*
 static long long fib_sequence(long long k)
 {
-    /* FIXME: use clz/ctz and fast algorithms to speed up */
     long long f[k + 2];
 
     f[0] = 0;
@@ -37,6 +40,34 @@ static long long fib_sequence(long long k)
     }
 
     return f[k];
+}
+*/
+
+static long long fib_sequence_fast_doubling(long long k)
+{
+    if (k < 0)
+        return 0;
+
+    long long h = 0;
+    for (long long i = k; i; ++h, i >>= 1)
+        ;
+
+    long long a = 0, b = 1;
+
+    for (long long mask = 1 << (h - 1); mask; mask >>= 1) {
+        long long c = a * (2 * b - a);
+        long long d = b * b + a * a;
+
+        if (mask & k) {
+            a = d;
+            b = c + d;
+        } else {
+            a = c;
+            b = d;
+        }
+    }
+
+    return a;
 }
 
 static int fib_open(struct inode *inode, struct file *file)
@@ -54,13 +85,25 @@ static int fib_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+static long long fib_time_proxy(long long k)
+{
+    kt = ktime_get();
+    long long result = fib_sequence_fast_doubling(k);
+    kt = ktime_sub(ktime_get(), kt);
+
+    printk(KERN_INFO "The computing time of %lld th fib number: %lld", k,
+           ktime_to_ns(kt));
+
+    return result;
+}
+
 /* calculate the fibonacci number at given offset */
 static ssize_t fib_read(struct file *file,
                         char *buf,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    return (ssize_t) fib_time_proxy(*offset);
 }
 
 /* write operation is skipped */
